@@ -1,0 +1,27 @@
+{
+    "name": "cuvva/ksuid",
+    "description": "KSUID lib for PHP",
+    "type": "library",
+    "authors": [
+        {
+            "name": "George Miller",
+            "email": "george.miller@cuvva.com"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require": {
+        "tuupola/base62": "dev-master"
+    },
+    "autoload": {
+        "psr-4": {
+            "Cuvva\\KSUID\\": "src/"
+        },
+        "files": [
+            "src/helpers.php"
+        ]
+    },
+    "require-dev": {
+        "illuminate/support": "^5.7@dev",
+        "phpunit/phpunit": "^7"
+    }
+}
