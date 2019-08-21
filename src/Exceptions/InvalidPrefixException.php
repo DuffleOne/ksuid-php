@@ -4,4 +4,4 @@ namespace Cuvva\KSUID\Exceptions;
 
 use Exception;
 
-class InvalidCharactersException extends Exception {}
+class InvalidPrefixException extends Exception {}

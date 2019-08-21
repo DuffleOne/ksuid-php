@@ -3,86 +3,75 @@ declare(strict_types=1);
 
 namespace Cuvva\KSUID;
 
+use SplFixedArray;
 use Tuupola\Base62Proxy as Base62;
-use Cuvva\KSUID\Exceptions\InvalidCharactersException;
-use Cuvva\KSUID\Exceptions\InvalidGenerationException;
-use Cuvva\KSUID\Exceptions\ParseException;
-use function Cuvva\KSUID\checkIdFragment;
+use Cuvva\KSUID\Exceptions as E;
+use Cuvva\KSUID\Validator;
 
 class ID
 {
-	public function __construct(string $environment, string $resource, int $timestamp, string $machineId, int $processId, int $sequenceId)
+	private $environment;
+	private $resource;
+	private $timestamp;
+	private $instance;
+	private $sequenceId;
+	private $string;
+
+	public function __construct(string $environment, string $resource, int $timestamp, InstanceIdentifier $instance, int $sequenceId)
 	{
-		checkIdFragment('environment', $environment);
-		checkIdFragment('resource', $resource);
-		$this->checkInteger('timestamp', $timestamp, 8);
-		$this->checkInteger('timestamp', $timestamp - Constants::epoch, 4);
-		$this->checkStrLength('machineId', $machineId, 6);
-		$this->checkInteger('processId', $processId, 4);
-		$this->checkInteger('sequenceId', $sequenceId, 4);
+		Validator::checkPrefix('environment', $environment);
+		Validator::checkPrefix('resource', $resource);
+		Validator::checkUint('timestamp', $timestamp, 8);
+		Validator::checkUint('sequenceId', $sequenceId, 4);
 
 		$this->environment = $environment;
 		$this->resource = $resource;
 		$this->timestamp = $timestamp;
-		$this->machineId = $machineId;
-		$this->processId = $processId;
+		$this->instance = $instance;
 		$this->sequenceId = $sequenceId;
-	}
-
-	private function checkInteger(string $name, int $value, int $byteLength): void
-	{
-		if ($value < 0) {
-			throw new InvalidCharactersException("${name} must be positive");
-		}
-
-		$bitLength = $byteLength * 8;
-
-		if ($value >= pow(2, $bitLength)) {
-			throw new InvalidCharactersException("{$name} must be a uint{$bitLength}");
-		}
-
-	}
-
-	private function checkStrLength(string $name, string $value, int $length): void
-	{
-		if (strlen($value) !== $length) {
-			throw new InvalidCharactersException("${name} is not the correct length");
-		}
 	}
 
 	public static function parse(string $input): ID
 	{
 		if (!$input) {
-			throw new ParseException("input is too short");
+			throw new E\ParseException('input must not be empty');
 		}
 
 		$parsed = self::splitPrefixId($input);
 		extract($parsed);
 
-		if ($id[0] !== '0' || $id[1] !== '0') {
-			throw new ParseException('invalid version');
+		$ba = new SplFixedArray(Constants::decodedLen);
+
+		for ($i = 0; $i < Constants::decodedLen; $i++) {
+			$ba[$i] = pack('C', 0);
 		}
 
-		$encoded = substr($id, 2);
-		$decoded = Base62::decode($id);
+		$decoded = Base62::decode($encoded);
+		$split = array_reverse(str_split($decoded));
+		$position = Constants::decodedLen;
 
-		$split = str_split($decoded);
+		foreach ($split as $item) {
+			if ($position < 0) {
+				throw new Exception('payload is larger than expected decoded length');
+			}
 
-		if (count($split) !== Constants::decodedLen) {
-			throw new ParseException('encoded length too long');
+			$ba[$position - 1] = $item;
+			$position--;
 		}
 
-		$timestamp = unpack('N', $split[0].$split[1].$split[2].$split[3])[1];
-		$machineId = $split[4].$split[5].$split[6].$split[7].$split[8].$split[9];
-		$processId = unpack('n', $split[10].$split[11])[1];
-		$sequenceId = unpack('N', $split[12].$split[13].$split[14].$split[15])[1];
+		$rawTimestamp = $ba[0] . $ba[1] . $ba[2] . $ba[3] . $ba[4] . $ba[5] . $ba[6] . $ba[7];
+		$rawInstance = $ba[8] . $ba[9] . $ba[10] . $ba[11] . $ba[12] . $ba[13] . $ba[14] . $ba[15] . $ba[16];
+		$rawSequence = $ba[17] . $ba[18] . $ba[19] . $ba[20];
+
+		$timestamp = unpack('J', $rawTimestamp)[1];
+		$instance = InstanceIdentifier::create($rawInstance);
+		$sequenceId = unpack('N', $rawSequence)[1];
 
 		return new ID (
 			$environment,
 			$resource,
-			$timestamp + Constants::epoch,
-			$machineId,
-			$processId,
+			$timestamp,
+			$instance,
 			$sequenceId
 		);
 	}
@@ -90,11 +79,11 @@ class ID
 	private static function splitPrefixId(string $input): array
 	{
 		if (preg_match(Constants::ksuidRegex, $input, $parsed) == false) {
-			throw new ParseException("cannot parse ksuid");
+			throw new E\ParseException("id is invalid");
 		}
 
 		if ($parsed[1] === 'prod') {
-			throw new ParseException("production env is implied");
+			throw new E\ParseException("production env is implied");
 		}
 
 		if ($parsed[1] === '') {
@@ -104,46 +93,45 @@ class ID
 		return [
 			'environment' => $parsed[1],
 			'resource' => $parsed[2],
-			'id' => $parsed[3],
+			'encoded' => $parsed[3],
 		];
 	}
 
 	public function toString(): string
 	{
-		$output = "";
-		$payload = "";
-
-		if ($this->environment !== '' && $this->environment !== 'prod') {
-			$output .= "{$this->environment}_";
+		if ($this->string) {
+			return $this->string;
 		}
 
-		$output .= "{$this->resource}_";
-		$output .= '00'; // Add future proofing padding
+		$decoded = "";
 
-		$payload .= pack('N', $this->timestamp - Constants::epoch);
-		$payload .= $this->machineId;
-		$payload .= pack('n', $this->processId);
-		$payload .= pack('N', $this->sequenceId);
+		$env = $this->environment === 'prod' ? '' : "{$this->environment}_";
+		$prefix = "{$env}{$this->resource}_";
 
-		$encodedPayload = Base62::encode($payload);
+		$decoded .= pack('J', $this->timestamp);
+		$decoded .= $this->instance->toBuffer();
+		$decoded .= pack('N', $this->sequenceId);
 
-		if (strlen($encodedPayload) > Constants::encodedLen) {
-			throw new InvalidGenerationException("payload is too long");
+		$encoded = Base62::encode($decoded);
+
+		if (strlen($encoded) > Constants::encodedLen) {
+			throw new InvalidByteLengthException("decoded byte length is too long");
 		}
 
-		$paddedPayload = str_pad($encodedPayload, Constants::encodedLen, '0', STR_PAD_LEFT);
-		$output .= $paddedPayload;
+		$padded = str_pad($encoded, Constants::encodedLen, '0', STR_PAD_LEFT);
 
+		$this->string = "{$prefix}{$padded}";
 
-		return $output;
+		return $this->string;
 	}
 
 	public function __toString(): string
 	{
-		try {
-			return $this->toString();
-		} catch (Exception $error) {
-			return "ERROR: {$error->getMessage()}";
-		}
+		return $this->toString();
+	}
+
+	public function __get($var)
+	{
+		return $this->{$var};
 	}
 }

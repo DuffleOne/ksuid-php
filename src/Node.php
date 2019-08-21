@@ -8,17 +8,16 @@ use function Cuvva\KSUID\checkIdFragment;
 final class Node
 {
 	private $environment;
-	private $machineId;
-	private $processId;
-	private $currentSequence;
+	private $instance;
 	private $lastTimestamp;
+	private $currentSequence;
 
-	public function __construct(?string $environment = 'prod') {
+	public function __construct(?string $environment = 'prod', ?InstanceIdentifier $instance = null) {
+		$instance = $this->defaultInstance($instance);
+
 		$this->environment = $environment;
-		$this->machineId = $this->getMacAddress();
-		$this->processId = getmypid();
-
-		$this->lastTimestamp = Constants::epoch;
+		$this->instance = $instance;
+		$this->lastTimestamp = 0;
 		$this->currentSequence = 0;
 	}
 
@@ -29,48 +28,72 @@ final class Node
 
 	public function setEnvironment(string $environment): void
 	{
-		checkIdFragment('environment', $environment);
+		Validator::checkPrefix('environment', $environment);
 
 		$this->environment = $environment;
+	}
+
+	public function setInstanceIdentifier(InstanceIdentifier $instance): void
+	{
+		$this->instance = $instance;
 	}
 
 	public function generate(string $resource): ID {
 		$now = time();
 
+		Validator::checkPrefix('resource', $resource);
+
 		if ($this->lastTimestamp !== $now) {
 			$this->lastTimestamp = $now;
 			$this->currentSequence = 0;
+		} else {
+			$this->currentSequence += 1;
 		}
-
-		$this->currentSequence += 1;
 
 		return new ID (
 			$this->environment,
 			$resource,
 			$this->lastTimestamp,
-			$this->machineId,
-			$this->processId % Constants::processIdSize,
+			$this->instance,
 			$this->currentSequence
 		);
 	}
 
-	private function getMacAddress(): string
+	private function defaultInstance(?InstanceIdentifier $instance = null): InstanceIdentifier
 	{
-		$out = '';
+		if ($instance !== null)
+			return $instance;
 
+		$id = $this->getMacPidNodeId();
+
+		if (isset($id) && $id !== null) {
+			return $id;
+		}
+
+		return new InstanceIdentifier(Constants::RANDOM, random_bytes(8));
+	}
+
+	private function getMacPidNodeId(): ?InstanceIdentifier
+	{
 		try {
-			$interfaces = NetworkInterfaces::getInterfaces();
+			$macAddresses = (new \Duffleman\MacAddr\Retriever)->all();
 
-			if (count($interfaces) === 0) {
-				return random_bytes(6);
+			if (!$macAddresses || count($macAddresses) === 0)
+				return null;
+
+			$macAddr = $macAddresses[0];
+
+			if (!$macAddr || $macAddr === '00:00:00:00:00:00') {
+				return null;
 			}
 
-			$interface = $interfaces[0];
-			$interface = str_replace(':', '', $interface);
+			$macAddr = str_replace(':', '', $macAddr);
+			$macAddr = hex2bin($macAddr);
+			$processId = getmypid() % 65536;
+			$processId = pack('n', "{$processId}");
+			$payload = "{$macAddr}{$processId}";
 
-			return hex2bin($interface);
-		} catch (UnsupportedOSException $error) {
-			return random_bytes(6);
+			return new InstanceIdentifier(Constants::MAC_AND_PID, $payload);
 		} catch (Exception $error) {
 			throw $error;
 		}

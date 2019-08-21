@@ -12,13 +12,23 @@ final class KSUID
 		// static class only. Cannot construct
 	}
 
-	public static function generate(string $resource): ID
+	private function __clone()
+	{
+		// static class only. No cloning
+	}
+
+	public static function Instance(): Node
 	{
 		if (!self::$node) {
 			self::$node = new Node();
 		}
 
-		return self::$node->generate($resource);
+		return self::$node;
+	}
+
+	public static function generate(string $resource): ID
+	{
+		return self::Instance()->generate($resource);
 	}
 
 	public static function parse(string $ksuid): ID
@@ -28,10 +38,11 @@ final class KSUID
 
 	public static function setEnvironment(string $environment): void
 	{
-		if (!self::$node) {
-			self::$node = new Node();
-		}
+		self::Instance()->setEnvironment($environment);
+	}
 
-		self::$node->setEnvironment($environment);
+	public static function setInstanceIdentifier(InstanceIdentifier $instance): void
+	{
+		self::Instance()->setInstanceIdentifier($instance);
 	}
 }

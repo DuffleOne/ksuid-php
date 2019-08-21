@@ -40,6 +40,8 @@ var_dump($id);
 
 ## Testing
 
+*No tests until the library has been finalised*
+
 ```bash
 composer install cuvva/ksuid
 

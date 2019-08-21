@@ -4,4 +4,4 @@ namespace Cuvva\KSUID\Exceptions;
 
 use Exception;
 
-class InvalidGenerationException extends Exception {}
+class NegativeIntegerException extends Exception {}
